@@ -1,7 +1,79 @@
 #!/bin/sh
 
+###########################################################
+# System Initialization Script for Embedded Mining Devices
+#
 # Version: 1.0
-# Purpose: System initialization script for managing startup, backups, and configurations
+#
+# Description:
+# This script orchestrates the full system initialization process
+# for an embedded device (such as a Bitcoin miner) including
+# startup scripts, WiFi management, backups, configuration setup,
+# logging, and SSH access. It is intended to ensure the system
+# is fully configured, operational, and resilient to failures.
+#
+# Main Features:
+# 1. Startup Script Execution:
+#    - Runs all executable scripts in /etc/init.d (S??*), supporting
+#      both .sh scripts and standard init scripts.
+#
+# 2. Logging:
+#    - Maintains a timestamped log file at /opt/nanologs.logs
+#      for debugging and audit purposes.
+#
+# 3. Root and UBI Partition Management:
+#    - Checks and fixes the root filesystem at boot.
+#    - Attaches the correct UBI partition (A or B) based on firmware
+#      environment variables.
+#
+# 4. Nanolock Management:
+#    - Creates a /bin/nanolock utility to prevent or allow deletion
+#      of sensitive data based on a config file (/etc/nanolock.conf).
+#
+# 5. WiFi Configuration and Watchdog:
+#    - Creates /opt/wpa_supplicant.conf with SSID and password if missing.
+#    - (Watchdog functionality manages reconnection and logs failures
+#      after 5 minutes without internet, though full watchdog logic
+#      exists in another script.)
+#
+# 6. Conditional Cleanup:
+#    - Deletes backup, temporary, and system files if nanolock is disabled.
+#
+# 7. Worker Detection:
+#    - Generates a unique worker name using DeviceName + last 4 characters
+#      of the WiFi MAC address.
+#
+# 8. Backup and Data Restoration:
+#    - Mounts UBI partitions, copies initial data to /opt backups.
+#    - Applies HTML patches to web interface files.
+#    - Generates cgminer.ini and systemcfg.ini files with appropriate
+#      configuration including Bitcoin address and worker name.
+#    - Restores backups from /opt to /mnt and /data if present.
+#
+# 9. Log Management in RAM:
+#    - Moves /data/log to RAM (/tmp/zlog) for performance.
+#
+# 10. Final System Configuration:
+#     - Sets core dump patterns and limits.
+#     - Starts optional swupdate service if enabled.
+#     - Runs user permission scripts if available.
+#     - Cleans /data/core if disk usage exceeds thresholds.
+#
+# 11. SSH Setup:
+#     - Sets admin password.
+#     - Generates host keys if missing.
+#     - Starts SSH server for remote access.
+#
+# 12. Orchestration:
+#     - All tasks are executed via the main() function in a
+#       defined order to ensure proper initialization.
+#
+# Notes:
+# - Intended for embedded mining devices using Avalonnano hardware.
+# - Uses UBI filesystem and UBIFS mounts for persistent storage.
+# - Performs safety checks on MAC addresses, UBI devices, and config files.
+###########################################################
+
 wifiname="WifiName"
 wifipass="WifiPass"
 btc_address="btcaddress"
