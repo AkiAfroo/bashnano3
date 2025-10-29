@@ -1,5 +1,5 @@
-# Avalon Nano System Initialization Script
-
+# BASHNANO3 1.0
+![BASHNANO3](https://i.imgur.com/8v7x9kM.png)
 **Version:** `1.0`  
 **Target Device:** Avalon Nano 3 (Bitcoin Miner)  
 **Language:** Shell Script (`sh`)  
