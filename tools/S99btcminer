@@ -1,5 +1,7 @@
 #!/bin/sh
-
+# This script manages the btcminer process, allowing delayed startup after boot,
+# as well as stopping, restarting, and checking its status. It also creates a
+# convenient control script (/bin/btcminerctl) if it does not exist.
 ### BEGIN INIT INFO
 # Provides:          btcminer
 # Required-Start:    $network
