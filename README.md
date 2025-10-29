@@ -61,10 +61,10 @@ This is a **complete system initialization script** for the **Avalon Nano 3** Bi
 
 ## Configuration
 
-Edit these at the top of the script:
+Edit these at the top of the script in /tools/rcS:
 
 ```sh
-wifiname="YourWiFiSSID"
-wifipass="YourWiFiPassword"
-btc_address="1YourBitcoinAddressHere"
-DeviceName="nano"          # Base name for auto-generated worker
+wifiname="WifiName"
+wifipass="WifiPass"
+btc_address="btcaddress"
+DeviceName="nano3"          # Base name for auto-generated worker
