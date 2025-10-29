@@ -1,5 +1,41 @@
 #!/bin/sh
-### simple init script for watchdog
+###########################################################
+# WiFi Watchdog Init Script
+#
+# Description:
+# This script provides a "watchdog" for the WiFi connection
+# on Linux embedded systems or lightweight servers. Its main
+# goal is to ensure that the WiFi interface (wlan0) is always
+# connected to the internet and to take automatic actions if
+# connectivity fails.
+#
+# Features:
+# 1. Connection monitoring:
+#    - Periodically checks if the WiFi interface has an IP
+#      and can ping 8.8.8.8 (Google DNS) to verify connectivity.
+# 2. WiFi interface restart:
+#    - If there is no connection, it brings the interface down
+#      and up, restarts wpa_supplicant, and requests DHCP again.
+# 3. Failure counter:
+#    - If consecutive failures reach MAX_FAILS (60),
+#      increments the restart counter and decides:
+#        a) Reboot the system if MAX_RESTARTS (3) is not reached
+#        b) Power off the system if restart attempts are exceeded
+# 4. Logging:
+#    - Logs important events after a minimum number of failures (30)
+#      to /opt/wlan.logs.
+# 5. Scheduled daily tasks:
+#    - Copies specific "best shares" logs to a daily file at 23:59.
+#    - Scheduled system reboot at 00:00.
+# 6. Multiple instance prevention:
+#    - Uses /tmp/watchdog.lock to ensure only one instance runs at a time.
+#
+# Script structure:
+# - create_watchdog(): dynamically generates the internal
+#   /bin/watchdog script if it does not exist.
+# - start_wifi(): restarts the interface and wpa_supplicant
+#   if a connection failure is detected.
+###########################################################
 
 WATCHDOG_BIN="/bin/watchdog"
 
