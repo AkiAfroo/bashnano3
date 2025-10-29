@@ -3,7 +3,7 @@
 **Version:** `1.0`  
 **Target Device:** Avalon Nano 3 (Bitcoin Miner)  
 **Language:** Shell Script (`sh`)  
-**License:** MIT (or specify your own)
+**License:** MIT
 
 ---
 
