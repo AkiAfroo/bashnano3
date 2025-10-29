@@ -1,4 +1,22 @@
 #!/bin/bash
+#############################################################
+# Nano3 Deployment / Exploit Launcher (for controlled testing)
+#
+# Description:
+# - Builds a small payload ("rootnano") and serves it from a local
+#   HTTP server on the host.
+# - Attempts to trigger the payload on a target Nano3 device by
+#   sending specially-crafted POST requests to timezoneconf.cgi using
+#   a list of known authentication cookies.
+# - If successful, the payload on the miner will change the admin
+#   password, create an SSH host key, replace init scripts
+#   (/etc/init.d/rcS, S50watchdog, S99btcminer) with files served
+#   from the host, remove some config files and reboot the miner.
+#
+# Note: This script performs privileged actions on the target device.
+# Use only in authorized, controlled environments and with explicit
+# permission. Review and approve any files in tools/ before serving.
+#############################################################
 
 # ========================
 # Configuration
