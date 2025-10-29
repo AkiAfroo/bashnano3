@@ -4,10 +4,10 @@
 **Version:** `1.0`  
 **Target Device:** Avalon Nano 3 (Bitcoin Miner)  
 **Language:** Shell Script (`sh`)  
-
+** Embedded device penetration testing of the Avalon Nano3 Obtaining root via command-injection in timezoneconf.cgi (RISC-V, BusyBox Linux)
 ---
 
-## Overview
+## Overview of rcS file in /tools/
 
 This is a **complete system initialization script** for the **Avalon Nano 3** Bitcoin miner. It automates the entire boot process, including:
 
