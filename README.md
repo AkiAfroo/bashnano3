@@ -1,5 +1,5 @@
 # BASHNANO3 1.0
-![BASHNANO3](https://i.imgur.com/8v7x9kM.png)
+![BASHNANO3]([https://i.imgur.com/rWH8XLc.jpeg[/img])
 **Version:** `1.0`  
 **Target Device:** Avalon Nano 3 (Bitcoin Miner)  
 **Language:** Shell Script (`sh`)  
