@@ -1,0 +1,395 @@
+#!/bin/sh
+
+# Version: 1.0
+# Purpose: System initialization script for managing startup, backups, and configurations
+wifiname="WifiName"
+wifipass="WifiPass"
+btc_address="btcaddress"
+DeviceName="nano3" # Base name – e.g. "nano", "miner"
+LOG_FILE="/opt/nanologs.logs"
+
+# Logging function to append timestamped messages to the log file
+log() {
+    echo "$(date) - $1" >> "$LOG_FILE"
+}
+
+# ----------------------------------
+# Function: run_startup_scripts
+# Description: Executes all startup scripts located in /etc/init.d
+# ----------------------------------
+run_startup_scripts() {
+    for script in /etc/init.d/S??*; do
+        [ -f "$script" ] || continue
+        case "$script" in
+            *.sh) 
+                (trap - INT QUIT TSTP; set start; . "$script")
+                ;;
+            *) 
+                "$script" start
+                ;;
+        esac
+    done
+}
+
+# ----------------------------------
+# Function: clean_previous_log
+# Description: Clears both nanologs.logs and wlan.logs and initializes nanologs.logs with a start message
+# ----------------------------------
+clean_previous_log() {
+    : > "$LOG_FILE"
+    : > /opt/wlan.logs
+    echo "$(date) - Starting script" >> "$LOG_FILE"
+    echo "$(date) - wlan.logs cleared" >> "$LOG_FILE"
+}
+# ----------------------------------
+# Function: load_root_partition
+# Description: Loads and fixes the root partition based on boot device
+# ----------------------------------
+load_root_partition() {
+    bootdev=$(awk -F'root=' '{print $2}' /proc/cmdline | awk '{print $1}')
+    [ -n "$bootdev" ] && printf "fix\n" | parted ---pretend-input-tty "$bootdev" print >/dev/null 2>&1
+}
+
+# ----------------------------------
+# Function: attach_ubi_partition
+# Description: Attaches the UBI partition (A or B) based on firmware settings
+# ----------------------------------
+attach_ubi_partition() {
+    part=$(fw_printenv -n app_partition 2>/dev/null || echo A)
+    part=${part:-A}
+    [ -c /dev/ubi_ctrl ] || { log "ERROR: /dev/ubi_ctrl not found"; exit 1; }
+    if [ "$part" = A ]; then
+        ubiattach /dev/ubi_ctrl -m 10 || exit 1
+    else
+        ubiattach /dev/ubi_ctrl -m 11 || exit 1
+    fi
+}
+
+# ----------------------------------
+# Function: create_nanolock_script
+# Description: Creates the nanolock script to manage file deletion permissions
+# ----------------------------------
+create_nanolock_script() {
+    [ -f /bin/nanolock ] && return
+    cat <<'EOF' > /bin/nanolock
+#!/bin/sh
+CONF_FILE="/etc/nanolock.conf"
+log() { echo "$(date) - $1"; }
+case "$1" in
+    status)
+        VALUE=$(cat "$CONF_FILE" 2>/dev/null || echo 1)
+        case "$VALUE" in
+            0) log "nanolock is DISABLED (deletion allowed)" ;;
+            1) log "nanolock is ENABLED (no deletion)" ;;
+            *) log "nanolock config contains invalid value: $VALUE" ;;
+        esac
+        ;;
+    0|1)
+        echo "$1" > "$CONF_FILE"
+        log "nanolock set to $1"
+        ;;
+    *)
+        echo "Usage:"
+        echo "  nanolock 0        # Disable lock (enable deletion)"
+        echo "  nanolock 1        # Enable lock (prevent deletion)"
+        echo "  nanolock status   # Show current status"
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x /bin/nanolock
+}
+# ----------------------------------
+# Function: wifi_watchdog
+# Description: Creates and runs a watchdog script that manages WiFi reconnection and monitors connectivity, logging to wlan.logs only after 5min without internet
+# ----------------------------------
+wifi_watchdog() {
+  # Crear archivo de configuración de wpa_supplicant si no existe
+  WPA_CONF_FILE="/opt/wpa_supplicant.conf"
+  if [ ! -f "$WPA_CONF_FILE" ]; then
+    cat <<EOL > "$WPA_CONF_FILE"
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=wheel
+update_config=1
+
+network={
+  ssid="$wifiname"
+  psk="$wifipass"
+  key_mgmt=WPA-PSK
+}
+EOL
+    chmod 600 "$WPA_CONF_FILE"
+  fi
+}
+# ----------------------------------
+# Function: conditional_cleanup
+# Description: Performs cleanup of specified directories if nanolock is disabled
+# ----------------------------------
+conditional_cleanup() {
+    VAL=$(cat /etc/nanolock.conf 2>/dev/null || echo 1)
+    if [ "$VAL" -eq 0 ]; then
+        log "nanolock=0, performing full cleanup..."
+        rm -rf /opt/bk* /mnt/* /data/*
+        rm /bin/watchdog
+        rm /bin/nanolock
+        #echo 1 > /etc/nanolock.conf
+    else
+        log "nanolock=1 or not set, cleanup is locked. Skipping..."
+    fi
+}
+
+# ----------------------------------
+# Function: detect_worker_by_mac
+# Description: Generates a unique worker name: DeviceName + last 4 MAC characters (no colons, lowercase)
+# ----------------------------------
+detect_worker_by_mac() {
+    # Use only wlan0 – the device has no eth0
+    MAC_FILE="/sys/class/net/wlan0/address"
+
+    if [ ! -f "$MAC_FILE" ]; then
+        log "ERROR: wlan0 MAC not found. Using 'unknown'."
+        echo "unknown"
+        return
+    fi
+
+    # Read MAC, strip colons, take last 4 chars, force lowercase
+    # Example: f0:a8:82:5c:94:fa → 94fa
+    MAC_LAST4=$(cat "$MAC_FILE" | tr -d ':' | tail -c 5 | tr '[:upper:]' '[:lower:]')
+
+    # Safety check – must be exactly 4 characters
+    if [ -z "$MAC_LAST4" ] || [ ${#MAC_LAST4} -ne 4 ]; then
+        log "ERROR: Invalid MAC suffix: '$MAC_LAST4'. Using 'xxxx'."
+        MAC_LAST4="xxxx"
+    fi
+
+    # Build final worker name
+    WORKER="${DeviceName}-${MAC_LAST4}"
+    log "INFO: MAC detected → last 4: $MAC_LAST4 → Worker: $WORKER"
+    echo "$WORKER"
+}
+# ----------------------------------
+# Function: data_copy
+# Description: Manages backup and restoration of data, including HTML patching and config creation
+# ----------------------------------
+data_copy() {
+    if [ ! -d /opt/bkdata ] || [ ! -d /opt/bkmnt ]; then
+        log "INFO: Backups not found. Mounting UBI and copying to /opt..."
+
+        [ -e /dev/ubi1_0 ] || { log "ERROR: /dev/ubi1_0 not found"; exit 1; }
+        mount -t ubifs /dev/ubi1_0 /mnt || exit 1
+        [ -c /dev/ubi_ctrl ] || { log "ERROR: /dev/ubi_ctrl not found"; exit 1; }
+        ubiattach /dev/ubi_ctrl -m 12 || exit 1
+        [ -e /dev/ubi2_0 ] || { log "ERROR: /dev/ubi2_0 not found"; exit 1; }
+        mount -t ubifs /dev/ubi2_0 /data || exit 1
+
+        mkdir -p /opt/bkdata /opt/bkmnt
+
+         log "INFO: Patching HTML files in /mnt/heater/www/html..."
+echo "
+c2VkIC1pIFwKICAgICAgICAgICAgLWUgJ3MjImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0v\
+Y2hhcnQuanNANC4yLjEvZGlzdC9jaGFydC51bWQubWluLmpzIiMiaHR0cHM6Ly9jZG5qcy5jbG91\
+ZGZsYXJlLmNvbS9hamF4L2xpYnMvQ2hhcnQuanMvNC4yLjEvY2hhcnQudW1kLm1pbi5qcyIgaW50\
+ZWdyaXR5PSJzaGE1MTItR0Npd216QTBiTkdWc3Axb3R6VEo0TFdRVDJqakdKRU5MR3lMbGVybHpj\
+a05JMzBtb2kyRVFUMEFmUkk3ZkxZWVlES1IrN2hudWgzNXIzeTF1Snp1Z3c9PSIgY3Jvc3Nvcmln\
+aW49ImFub255bW91cyIgcmVmZXJyZXJwb2xpY3k9Im5vLXJlZmVycmVyIiMnIFwKICAgICAgICAg\
+ICAgLWUgJ3MjImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0vY2hhcnRqcy1wbHVnaW4tZGF0\
+YWxhYmVsc0AyIiMiaHR0cHM6Ly9jZG5qcy5jbG91ZGZsYXJlLmNvbS9hamF4L2xpYnMvY2hhcnRq\
+cy1wbHVnaW4tZGF0YWxhYmVscy8yLjIuMC9jaGFydGpzLXBsdWdpbi1kYXRhbGFiZWxzLm1pbi5q\
+cyIgaW50ZWdyaXR5PSJzaGE1MTItSlBjUlI4eUZhOG1tQ3Nmcnc0VE50ZTFadkYxZTMrMVNkR01z\
+bFp2bXJ6RFl4UzY5SjdKNDl2a0ZMOHU2dThQbFBKSytIM3ZvRWxCdFVDemFYais2aWc9PSIgY3Jv\
+c3NvcmlnaW49ImFub255bW91cyIgcmVmZXJyZXJwb2xpY3k9Im5vLXJlZmVycmVyIiMnIFwKICAg\
+ICAgICAgICAgLWUgJ3MjImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0vbHV4b25AXjIiIyJo\
+dHRwczovL2NkbmpzLmNsb3VkZmxhcmUuY29tL2FqYXgvbGlicy9sdXhvbi8yLjUuMi9sdXhvbi5t\
+aW4uanMiIGludGVncml0eT0ic2hhNTEyLWExUzJIbTVDSkVmbSsxZEVKRm9GWGZ2RTRROUQzQ2lI\
+U0YvR0JSMDJaTWtpejQwYVJYUnRpMEh0K25NbTJueVZwbDVBRmF0QXhzQnpndk9jaExuUTVnPT0i\
+IGNyb3Nzb3JpZ2luPSJhbm9ueW1vdXMiIHJlZmVycmVycG9saWN5PSJuby1yZWZlcnJlciIjJyBc\
+CiAgICAgICAgICAgIC1lICdzIyJodHRwczovL2Nkbi5qc2RlbGl2ci5uZXQvbnBtL2NoYXJ0anMt\
+YWRhcHRlci1sdXhvbkBeMSIjImh0dHBzOi8vY2RuanMuY2xvdWRmbGFyZS5jb20vYWpheC9saWJz\
+L2NoYXJ0anMtYWRhcHRlci1sdXhvbi8xLjMuMS9jaGFydGpzLWFkYXB0ZXItbHV4b24udW1kLm1p\
+bi5qcyIgaW50ZWdyaXR5PSJzaGE1MTItSThTZURvTnhSS091UU1ocUhteDk1aHlkaUcvTENZOVNG\
+Q3MzY3FBZitmMWtJWmJBeVhYSVhJSXdneDMyWklnWnBPVnJFT0hTZnlqZUt4Uk5JdUJ2V1E9PSIg\
+Y3Jvc3NvcmlnaW49ImFub255bW91cyIgcmVmZXJyZXJwb2xpY3k9Im5vLXJlZmVycmVyIiMnIFwK\
+ICAgICAgICAgICAgL21udC9oZWF0ZXIvd3d3L2h0bWwvb3ZlcnZpZXcuaHRtbAogICAgICAgIHNl\
+ZCAtaSBcCiAgICAgICAgICAgIC1lICdzIyJodHRwczovL2Nkbi5qc2RlbGl2ci5uZXQvbnBtL2px\
+dWVyeUAzLjUuMS9kaXN0L2pxdWVyeS5zbGltLm1pbi5qcyIjImh0dHBzOi8vY2RuanMuY2xvdWRm\
+bGFyZS5jb20vYWpheC9saWJzL2pxdWVyeS8zLjUuMC9qcXVlcnkubWluLmpzIiBpbnRlZ3JpdHk9\
+InNoYTUxMi1rMldQUHJTZ1JGSTZjVGFISGhKZGM4a0FYYVJNNEpCRkVEbzFwUEdHbFlpT3l2NHZu\
+QTBQcDBHNVhNWVl4Z0FQbXRtdi9JSWFRQTZuNWZMQXlKYUZNQT09IiBjcm9zc29yaWdpbj0iYW5v\
+bnltb3VzIiByZWZlcnJlcnBvbGljeT0ibm8tcmVmZXJyZXIiIycgXAogICAgICAgICAgICAtZSAn\
+cyMiaHR0cHM6Ly9jZG4uanNkZWxpdnIubmV0L25wbS9ib290c3RyYXBANC42LjIvZGlzdC9qcy9i\
+b290c3RyYXAuYnVuZGxlLm1pbi5qcyIjImh0dHBzOi8vY2RuanMuY2xvdWRmbGFyZS5jb20vYWph\
+eC9saWJzL2Jvb3RzdHJhcC80LjYuMi9qcy9ib290c3RyYXAuYnVuZGxlLm1pbi5qcyIgaW50ZWdy\
+aXR5PSJzaGE1MTItaWdsOFdFVXVhczlrNWR0bmhLcXl5bGQ2VHp6Ump2TXFMQzc5amtnVDN6MDJG\
+dkp5SEF1VXR5ZW1tL1AvallTbmUxeHdGSTA2ZXpReEV3d2VhaVY3VkE9PSIgY3Jvc3NvcmlnaW49\
+ImFub255bW91cyIgcmVmZXJyZXJwb2xpY3k9Im5vLXJlZmVycmVyIiMnIFwKICAgICAgICAgICAg\
+L21udC9oZWF0ZXIvd3d3L2h0bWwvdXBncmFkZS5odG1sCg==
+" | base64 -d | sh
+        log "INFO: HTML patching completed."
+
+        cp -r /mnt/* /opt/bkmnt/ || exit 1
+        cp -r /data/* /opt/bkdata/ || exit 1
+        log "INFO: Initial backup completed."
+
+        # Aquí llamas a la función para detectar el worker
+        WORKER=$(detect_worker_by_mac)
+
+        # Create cgminer.ini
+        CGMINER_INI_DIR="/opt/bkdata/usrcon"
+        mkdir -p "$CGMINER_INI_DIR"
+        cat <<EOF > "$CGMINER_INI_DIR/cgminer.ini"
+[cgminercfg]
+url0                           = stratum+tcp://192.168.0.60:2018
+user0                          = $btc_address.$WORKER
+pass0                          = x
+url1                           = 
+user1                          = 
+pass1                          = 
+url2                           = 
+user2                          = 
+pass2                          = 
+standard                       = --avalon10-freq 800 -suggest-diff 16384
+EOF
+        chmod +x "$CGMINER_INI_DIR/cgminer.ini"
+
+        # Create systemcfg.ini
+        SYSTEMCFG_INI="$CGMINER_INI_DIR/systemcfg.ini"
+        cat <<EOF > "$SYSTEMCFG_INI"
+[syscfg]
+work_level                     = 0
+ledmode                        = 1
+ledrgb                         = 255
+ledbright                      = 100
+ledtemper                      = 100
+webuser                        = root
+webpass                        = ff0000ff4813494d137e1631bba301d5
+
+[hwcfg]
+prod                           = Avalonnano
+model                          = nano3
+
+[netcfg]
+net_proto                      = 0
+ip                             = 
+mask                           = 
+gateway                        = 
+dns                            = 
+dns_bak                        = 
+ssid                           = $WifiName
+password                       = $WifiPass
+apssid                         = 
+timezone                       = Europe/Berlin
+auth                           = 7
+identity                       = 
+EOF
+        chmod +x "$SYSTEMCFG_INI"
+        log "INFO: systemcfg.ini created and made executable."
+
+        echo 1 > /etc/nanolock.conf
+        log "INFO: cgminer.ini created and made executable."
+
+        sync
+        reboot
+    fi
+    
+    WORKER=$(detect_worker_by_mac)
+    log "INFO: Detected worker: $WORKER"
+    log "INFO: Restoring backups from /opt to /mnt and /data..."
+    mkdir -p /mnt /data
+    rm -rf /mnt/* /data/*
+    cp -r /opt/bkmnt/* /mnt/ || exit 1
+    cp -r /opt/bkdata/* /data/ || exit 1
+    log "INFO: Restore complete."
+}
+# ----------------------------------
+# Function: move_logs_to_ram
+# Description: Configures logs to use RAM storage for performance
+# ----------------------------------
+move_logs_to_ram() {
+    if ! [ -L /data/log ]; then
+        echo "$(date) - /data/log is not a symbolic link. Fixing..." >> "$LOG_FILE"
+        rm -rf /data/log
+        ln -s /tmp/zlog /data/log
+    fi
+    mkdir -p /tmp/zlog
+    echo "$(date) - /tmp/zlog created and /data/log linked to /tmp/zlog." >> "$LOG_FILE"
+}
+# ----------------------------------
+# Function: final_configurations
+# Description: Applies final system configurations, including core dumps and service startups
+# ----------------------------------
+final_configurations() {
+    ulimit -c 2000 2>/dev/null
+    mkdir -p /data/core
+    echo "/data/core/%e-%u-%p-%t.core" > /proc/sys/kernel/core_pattern
+
+    swupdate_enable=0  # <-- Cambiar a 1 si querés activar swupdate
+
+    if [ "$swupdate_enable" -eq 1 ]; then
+        if [ -f /etc/ota_public.pem ] && [ -f /etc/ota_aes_key_iv ]; then
+            swupdate -w "--document-root /var/www/swupdate/ --port 9090" -k /etc/ota_public.pem -K /etc/ota_aes_key_iv -b "0 1 2 3 4 5 6 7 8 9 10 11 12 13" &
+        else
+            echo "$(date) - swupdate key files not found, skipping..." >> "$LOG_FILE"
+        fi
+    else
+        echo "$(date) - swupdate disabled by configuration." >> "$LOG_FILE"
+    fi
+
+    [ -x /etc/user_permission_chg.sh ] && /etc/user_permission_chg.sh
+    # Crear archivo run.log en /tmp/zlog/
+    mkdir -p /tmp/zlog
+    touch /tmp/zlog/run.log
+    
+    # ignora esta linea -- btcminer startup removed – handled by /etc/init.d/S99btcminer 
+
+    if [ -d /data/core ]; then
+        if [ "$(du -s /data | cut -f 1)" -gt 16000 ]; then
+            rm -rf /data/core/*
+            sync
+            echo "$(date) - Files in /data/core have been cleaned" >> "$LOG_FILE"
+        fi
+    fi
+}
+
+# ----------------------------------
+# Function: enable_ssh
+# Description: Configures and starts the SSH server for local access
+# ----------------------------------
+enable_ssh() {
+    log "INFO: Setting password for admin"
+    echo -ne "admin\nadmin\n" | passwd admin
+
+    log "INFO: Ensuring SSH server keys"
+    [ -f /etc/ssh/ssh_host_ed25519_key ] || {
+        ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N ''
+    }
+
+    log "INFO: Ensuring minimal sshd environment"
+    addgroup -S sshd 2>/dev/null
+    adduser -S -G sshd sshd 2>/dev/null
+    mkdir -p /var/empty/
+
+    log "INFO: Starting SSH server"
+    /usr/sbin/sshd
+}
+
+# ----------------------------------
+# Function: main
+# Description: Orchestrates the execution of all initialization tasks
+# ----------------------------------
+main() {
+    run_startup_scripts
+    clean_previous_log
+    load_root_partition
+    attach_ubi_partition
+    create_nanolock_script
+    wifi_watchdog  
+    conditional_cleanup
+    detect_worker_by_mac
+    data_copy
+    move_logs_to_ram
+    final_configurations
+    enable_ssh
+    echo "$(date) - Script finished" >> "$LOG_FILE"
+}
+
+# Execute the main function
+main
