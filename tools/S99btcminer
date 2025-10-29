@@ -1,0 +1,89 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:          btcminer
+# Required-Start:    $network
+# Required-Stop:     
+# Default-Start:     2 3 4 5
+# Default-Stop:      
+# Short-Description: Delayed btcminer startup after full boot
+### END INIT INFO
+
+BTC_DIR="/mnt/heater/app"
+BTC_EXEC="./btcminer"
+PROCESS_NAME="btcminer"
+DELAY=10  # Time in seconds (10 seconds)
+
+create_ctl_script() {
+    CTL_PATH="/bin/btcminerctl"
+    if [ ! -f "$CTL_PATH" ]; then
+        echo "Creating control script: $CTL_PATH"
+        cat << 'EOF' > "$CTL_PATH"
+#!/bin/sh
+case "$1" in
+  start|stop|restart|status)
+    /etc/init.d/S99btcminer "$1"
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
+EOF
+        chmod +x "$CTL_PATH"
+    fi
+}
+
+start_btcminer() {
+    echo "Delaying btcminer startup by $DELAY seconds..."
+    (
+        sleep "$DELAY"
+        if [ -x "$BTC_DIR/btcminer" ]; then
+            echo "Starting btcminer..."
+            cd "$BTC_DIR"
+            $BTC_EXEC &
+            cd - >/dev/null
+        else
+            echo "$(date) - btcminer not found or not executable" >> /opt/nanologs.log
+        fi
+    ) &
+}
+
+stop_btcminer() {
+    echo "Stopping btcminer..."
+    killall btcminer 2>/dev/null
+}
+
+status_btcminer() {
+    PID=$(ps | grep "$PROCESS_NAME" | grep -v grep | awk '{print $1}')
+    if [ -z "$PID" ]; then
+        echo "Process $PROCESS_NAME is not running."
+        exit 1
+    else
+        echo "Process $PROCESS_NAME is running with PID(s): $PID"
+        exit 0
+    fi
+}
+
+# Create control script if it doesn't exist
+create_ctl_script
+
+case "$1" in
+  start)
+    start_btcminer
+    ;;
+  stop)
+    stop_btcminer
+    ;;
+  restart)
+    stop_btcminer
+    start_btcminer
+    ;;
+  status)
+    status_btcminer
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
