@@ -77,7 +77,7 @@
 wifiname="mywifiname"
 wifipass="mypass"
 btc_address="btcaddress"
-DeviceName="GTX" # Base name – e.g. "nano", "miner"
+DeviceName="NANO3" # Base name – e.g. "nano", "miner"
 LOG_FILE="/opt/nanologs.logs"
 
 # Logging function to append timestamped messages to the log file
