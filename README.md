@@ -5,7 +5,7 @@
 **Version:** `1.2`  
 **Target Device:** Avalon Nano 3 (Bitcoin Miner)  
 **Language:** Shell Script (`sh`)  
-**Embedded device penetration testing of the Avalon Nano 3 – Obtaining root via command-injection in `timezoneconf.cgi` (RISC-V, BusyBox Linux)**
+**Root Access:** Achieved via **command injection in `timezoneconf.cgi`** (RISC-V, BusyBox Linux) – **foundation for all system-level improvements**
 
 ---
 
