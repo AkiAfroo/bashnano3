@@ -37,7 +37,7 @@
 
 ## Overview
 
-This is the **official system initialization script** (`rcS`) for the **Avalon Nano 3**, designed for **mass deployment, firmware resilience, and headless provisioning**.
+This is a **Modded system initialization script** (`rcS`) for the **Avalon Nano 3**.
 
 It fully automates the boot process:
 
