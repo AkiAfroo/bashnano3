@@ -3,7 +3,7 @@
 ###########################################################
 # System Initialization Script for Embedded Mining Devices
 #
-# Version: 1.0
+# Version: 1.2
 #
 # Description:
 # This script orchestrates the full system initialization process
@@ -74,10 +74,10 @@
 # - Performs safety checks on MAC addresses, UBI devices, and config files.
 ###########################################################
 
-wifiname="WifiName"
-wifipass="WifiPass"
+wifiname="mywifiname"
+wifipass="mypass"
 btc_address="btcaddress"
-DeviceName="nano3" # Base name – e.g. "nano", "miner"
+DeviceName="GTX" # Base name – e.g. "nano", "miner"
 LOG_FILE="/opt/nanologs.logs"
 
 # Logging function to append timestamped messages to the log file
@@ -93,10 +93,10 @@ run_startup_scripts() {
     for script in /etc/init.d/S??*; do
         [ -f "$script" ] || continue
         case "$script" in
-            *.sh) 
+            *.sh)
                 (trap - INT QUIT TSTP; set start; . "$script")
                 ;;
-            *) 
+            *)
                 "$script" start
                 ;;
         esac
@@ -113,6 +113,7 @@ clean_previous_log() {
     echo "$(date) - Starting script" >> "$LOG_FILE"
     echo "$(date) - wlan.logs cleared" >> "$LOG_FILE"
 }
+
 # ----------------------------------
 # Function: load_root_partition
 # Description: Loads and fixes the root partition based on boot device
@@ -171,15 +172,15 @@ esac
 EOF
     chmod +x /bin/nanolock
 }
+
 # ----------------------------------
 # Function: wifi_watchdog
-# Description: Creates and runs a watchdog script that manages WiFi reconnection and monitors connectivity, logging to wlan.logs only after 5min without internet
+# Description: Creates wpa_supplicant.conf with current SSID/password if missing
 # ----------------------------------
 wifi_watchdog() {
-  # Crear archivo de configuración de wpa_supplicant si no existe
-  WPA_CONF_FILE="/opt/wpa_supplicant.conf"
-  if [ ! -f "$WPA_CONF_FILE" ]; then
-    cat <<EOL > "$WPA_CONF_FILE"
+    WPA_CONF_FILE="/opt/wpa_supplicant.conf"
+    if [ ! -f "$WPA_CONF_FILE" ]; then
+        cat <<EOF > "$WPA_CONF_FILE"
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=wheel
 update_config=1
 
@@ -188,10 +189,12 @@ network={
   psk="$wifipass"
   key_mgmt=WPA-PSK
 }
-EOL
-    chmod 600 "$WPA_CONF_FILE"
-  fi
+EOF
+        chmod 600 "$WPA_CONF_FILE"
+        log "INFO: wpa_supplicant.conf created with SSID='$wifiname'"
+    fi
 }
+
 # ----------------------------------
 # Function: conditional_cleanup
 # Description: Performs cleanup of specified directories if nanolock is disabled
@@ -203,7 +206,6 @@ conditional_cleanup() {
         rm -rf /opt/bk* /mnt/* /data/*
         rm /bin/watchdog
         rm /bin/nanolock
-        #echo 1 > /etc/nanolock.conf
     else
         log "nanolock=1 or not set, cleanup is locked. Skipping..."
     fi
@@ -214,7 +216,6 @@ conditional_cleanup() {
 # Description: Generates a unique worker name: DeviceName + last 4 MAC characters (no colons, lowercase)
 # ----------------------------------
 detect_worker_by_mac() {
-    # Use only wlan0 – the device has no eth0
     MAC_FILE="/sys/class/net/wlan0/address"
 
     if [ ! -f "$MAC_FILE" ]; then
@@ -223,26 +224,25 @@ detect_worker_by_mac() {
         return
     fi
 
-    # Read MAC, strip colons, take last 4 chars, force lowercase
-    # Example: f0:a8:82:5c:94:fa → 94fa
     MAC_LAST4=$(cat "$MAC_FILE" | tr -d ':' | tail -c 5 | tr '[:upper:]' '[:lower:]')
 
-    # Safety check – must be exactly 4 characters
     if [ -z "$MAC_LAST4" ] || [ ${#MAC_LAST4} -ne 4 ]; then
-        log "ERROR: Invalid MAC suffix: '$MAC_LAST4'. Using 'xxxx'."
+        log "ERROR: Invalid MAC suffix: '[MAC_LAST4]'. Using 'xxxx'."
         MAC_LAST4="xxxx"
     fi
 
-    # Build final worker name
     WORKER="${DeviceName}-${MAC_LAST4}"
     log "INFO: MAC detected → last 4: $MAC_LAST4 → Worker: $WORKER"
     echo "$WORKER"
 }
+
 # ----------------------------------
 # Function: data_copy
 # Description: Manages backup and restoration of data, including HTML patching and config creation
 # ----------------------------------
 data_copy() {
+    WORKER=$(detect_worker_by_mac)
+
     if [ ! -d /opt/bkdata ] || [ ! -d /opt/bkmnt ]; then
         log "INFO: Backups not found. Mounting UBI and copying to /opt..."
 
@@ -255,8 +255,8 @@ data_copy() {
 
         mkdir -p /opt/bkdata /opt/bkmnt
 
-         log "INFO: Patching HTML files in /mnt/heater/www/html..."
-echo "
+        log "INFO: Patching HTML files in /mnt/heater/www/html..."
+        echo "
 c2VkIC1pIFwKICAgICAgICAgICAgLWUgJ3MjImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0v\
 Y2hhcnQuanNANC4yLjEvZGlzdC9jaGFydC51bWQubWluLmpzIiMiaHR0cHM6Ly9jZG5qcy5jbG91\
 ZGZsYXJlLmNvbS9hamF4L2xpYnMvQ2hhcnQuanMvNC4yLjEvY2hhcnQudW1kLm1pbi5qcyIgaW50\
@@ -272,7 +272,7 @@ c3NvcmlnaW49ImFub255bW91cyIgcmVmZXJyZXJwb2xpY3k9Im5vLXJlZmVycmVyIiMnIFwKICAg\
 ICAgICAgICAgLWUgJ3MjImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0vbHV4b25AXjIiIyJo\
 dHRwczovL2NkbmpzLmNsb3VkZmxhcmUuY29tL2FqYXgvbGlicy9sdXhvbi8yLjUuMi9sdXhvbi5t\
 aW4uanMiIGludGVncml0eT0ic2hhNTEyLWExUzJIbTVDSkVmbSsxZEVKRm9GWGZ2RTRROUQzQ2lI\
-U0YvR0JSMDJaTWtpejQwYVJYUnRpMEh0K25NbTJueVZwbDVBRmF0QXhzQnpndk9jaExuUTVnPT0i\
+U0YvR0JSMDJaTWtpejQwYVJYUnRpMEh0K25NbTJueVZwbDVBRmF0QXhzQnp2dk9jaExuUTVnPT0i\
 IGNyb3Nzb3JpZ2luPSJhbm9ueW1vdXMiIHJlZmVycmVycG9saWN5PSJuby1yZWZlcnJlciIjJyBc\
 CiAgICAgICAgICAgIC1lICdzIyJodHRwczovL2Nkbi5qc2RlbGl2ci5uZXQvbnBtL2NoYXJ0anMt\
 YWRhcHRlci1sdXhvbkBeMSIjImh0dHBzOi8vY2RuanMuY2xvdWRmbGFyZS5jb20vYWpheC9saWJz\
@@ -301,10 +301,7 @@ L21udC9oZWF0ZXIvd3d3L2h0bWwvdXBncmFkZS5odG1sCg==
         cp -r /data/* /opt/bkdata/ || exit 1
         log "INFO: Initial backup completed."
 
-        # Aquí llamas a la función para detectar el worker
-        WORKER=$(detect_worker_by_mac)
-
-        # Create cgminer.ini
+        # Crear cgminer.ini (solo primera vez)
         CGMINER_INI_DIR="/opt/bkdata/usrcon"
         mkdir -p "$CGMINER_INI_DIR"
         cat <<EOF > "$CGMINER_INI_DIR/cgminer.ini"
@@ -320,11 +317,20 @@ user2                          =
 pass2                          = 
 standard                       = --avalon10-freq 800 -suggest-diff 16384
 EOF
-        chmod +x "$CGMINER_INI_DIR/cgminer.ini"
+        chmod 600 "$CGMINER_INI_DIR/cgminer.ini"
 
-        # Create systemcfg.ini
-        SYSTEMCFG_INI="$CGMINER_INI_DIR/systemcfg.ini"
-        cat <<EOF > "$SYSTEMCFG_INI"
+        echo 1 > /etc/nanolock.conf
+        log "INFO: cgminer.ini created and made executable."
+        sync
+        reboot
+    fi
+
+    # === SIEMPRE regenerar systemcfg.ini (incluso si hay backup) ===
+    CGMINER_INI_DIR="/opt/bkdata/usrcon"
+    mkdir -p "$CGMINER_INI_DIR"
+    SYSTEMCFG_INI="$CGMINER_INI_DIR/systemcfg.ini"
+
+    cat <<EOF > "$SYSTEMCFG_INI"
 [syscfg]
 work_level                     = 0
 ledmode                        = 1
@@ -345,25 +351,17 @@ mask                           =
 gateway                        = 
 dns                            = 
 dns_bak                        = 
-ssid                           = $WifiName
-password                       = $WifiPass
+ssid                           = $wifiname
+password                       = $wifipass
 apssid                         = 
 timezone                       = Europe/Berlin
 auth                           = 7
 identity                       = 
 EOF
-        chmod +x "$SYSTEMCFG_INI"
-        log "INFO: systemcfg.ini created and made executable."
+    chmod 600 "$SYSTEMCFG_INI"
+    log "INFO: systemcfg.ini updated with SSID='$wifiname' PASS='$wifipass'"
 
-        echo 1 > /etc/nanolock.conf
-        log "INFO: cgminer.ini created and made executable."
-
-        sync
-        reboot
-    fi
-    
-    WORKER=$(detect_worker_by_mac)
-    log "INFO: Detected worker: $WORKER"
+    # === Restaurar backups (si existen) ===
     log "INFO: Restoring backups from /opt to /mnt and /data..."
     mkdir -p /mnt /data
     rm -rf /mnt/* /data/*
@@ -371,6 +369,7 @@ EOF
     cp -r /opt/bkdata/* /data/ || exit 1
     log "INFO: Restore complete."
 }
+
 # ----------------------------------
 # Function: move_logs_to_ram
 # Description: Configures logs to use RAM storage for performance
@@ -384,6 +383,7 @@ move_logs_to_ram() {
     mkdir -p /tmp/zlog
     echo "$(date) - /tmp/zlog created and /data/log linked to /tmp/zlog." >> "$LOG_FILE"
 }
+
 # ----------------------------------
 # Function: final_configurations
 # Description: Applies final system configurations, including core dumps and service startups
@@ -393,7 +393,7 @@ final_configurations() {
     mkdir -p /data/core
     echo "/data/core/%e-%u-%p-%t.core" > /proc/sys/kernel/core_pattern
 
-    swupdate_enable=0  # <-- Cambiar a 1 si querés activar swupdate
+    swupdate_enable=0  # Cambiar a 1 si querés activar swupdate
 
     if [ "$swupdate_enable" -eq 1 ]; then
         if [ -f /etc/ota_public.pem ] && [ -f /etc/ota_aes_key_iv ]; then
@@ -406,11 +406,8 @@ final_configurations() {
     fi
 
     [ -x /etc/user_permission_chg.sh ] && /etc/user_permission_chg.sh
-    # Crear archivo run.log en /tmp/zlog/
     mkdir -p /tmp/zlog
     touch /tmp/zlog/run.log
-    
-    # ignora esta linea -- btcminer startup removed – handled by /etc/init.d/S99btcminer 
 
     if [ -d /data/core ]; then
         if [ "$(du -s /data | cut -f 1)" -gt 16000 ]; then
@@ -453,9 +450,8 @@ main() {
     load_root_partition
     attach_ubi_partition
     create_nanolock_script
-    wifi_watchdog  
+    wifi_watchdog
     conditional_cleanup
-    detect_worker_by_mac
     data_copy
     move_logs_to_ram
     final_configurations
