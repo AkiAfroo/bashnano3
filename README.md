@@ -95,16 +95,6 @@ This init script manages the **`btcminer`** process with **delayed startup**, **
 
 4. **Error Handling & Logging**  
    - Logs to `/opt/nanologs.log` if `btcminer` is missing or not executable.  
-   - Silent `cd -` redirection to avoid polluting output.
-
-5. **Init Integration**  
-   - LSB-compliant headers (`### BEGIN INIT INFO`).  
-   - Depends on `$network` → runs **after networking is up**.  
-   - Runlevels: `2 3 4 5` (multi-user + GUI).
-
-6. **Execution Flow**  
-   - `S99` → **last in boot order** (after `S50watchdog`, SSH, etc.).  
-   - Background subshell + `&` → non-blocking boot.
 
 ### Why the Delay?
 - Prevents race conditions: miner tries to connect to pool **before WiFi is stable**.  
