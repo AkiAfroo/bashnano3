@@ -190,7 +190,7 @@ network={
   key_mgmt=WPA-PSK
 }
 EOF
-        chmod 600 "$WPA_CONF_FILE"
+        chmod 755 "$WPA_CONF_FILE"
         log "INFO: wpa_supplicant.conf created with SSID='$wifiname'"
     fi
 }
