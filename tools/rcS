@@ -73,7 +73,7 @@
 # - Uses UBI filesystem and UBIFS mounts for persistent storage.
 # - Performs safety checks on MAC addresses, UBI devices, and config files.
 ###########################################################
-
+nanopool="pool-url"    # change pool-url -> stratum+tcp://real-pool-url.com:port
 wifiname="mywifiname"
 wifipass="mypass"
 btc_address="btcaddress"
@@ -306,7 +306,7 @@ L21udC9oZWF0ZXIvd3d3L2h0bWwvdXBncmFkZS5odG1sCg==
         mkdir -p "$CGMINER_INI_DIR"
         cat <<EOF > "$CGMINER_INI_DIR/cgminer.ini"
 [cgminercfg]
-url0                           = stratum+tcp://192.168.0.60:2018
+url0                           = $nanopool
 user0                          = $btc_address.$WORKER
 pass0                          = x
 url1                           = 
