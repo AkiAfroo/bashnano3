@@ -3,7 +3,7 @@
 ###########################################################
 # System Initialization Script for Embedded Mining Devices
 #
-# Version: 1.2
+# Version: 1.3
 #
 # Description:
 # This script orchestrates the full system initialization process
@@ -73,12 +73,17 @@
 # - Uses UBI filesystem and UBIFS mounts for persistent storage.
 # - Performs safety checks on MAC addresses, UBI devices, and config files.
 ###########################################################
-nanopool="pool-url"    # change pool-url -> stratum+tcp://real-pool-url.com:port
-wifiname="mywifiname"
-wifipass="mypass"
-btc_address="btcaddress"
+
+
+
+####################THIS SHOULD BE IN A EXTERNAL CONFIG FILE THAT THE GO PROGRAM CAN READ. 
+nano3_pool="" # stratum+tcp://192.168.0.60:2019
+wifiname=""
+wifipass=""
+btc_address=""
 DeviceName="NANO3" # Base name – e.g. "nano", "miner"
 LOG_FILE="/opt/nanologs.logs"
+#############################################################################################
 
 # Logging function to append timestamped messages to the log file
 log() {
@@ -204,7 +209,7 @@ conditional_cleanup() {
     if [ "$VAL" -eq 0 ]; then
         log "nanolock=0, performing full cleanup..."
         rm -rf /opt/bk* /mnt/* /data/*
-        rm /bin/watchdog
+        rm /bin/nanowatch
         rm /bin/nanolock
     else
         log "nanolock=1 or not set, cleanup is locked. Skipping..."
@@ -306,7 +311,7 @@ L21udC9oZWF0ZXIvd3d3L2h0bWwvdXBncmFkZS5odG1sCg==
         mkdir -p "$CGMINER_INI_DIR"
         cat <<EOF > "$CGMINER_INI_DIR/cgminer.ini"
 [cgminercfg]
-url0                           = $nanopool
+url0                           = $nano3_pool
 user0                          = $btc_address.$WORKER
 pass0                          = x
 url1                           = 
@@ -317,7 +322,7 @@ user2                          =
 pass2                          = 
 standard                       = --avalon10-freq 800 -suggest-diff 16384
 EOF
-        chmod 600 "$CGMINER_INI_DIR/cgminer.ini"
+        chmod 755 "$CGMINER_INI_DIR/cgminer.ini"
 
         echo 1 > /etc/nanolock.conf
         log "INFO: cgminer.ini created and made executable."
@@ -358,7 +363,7 @@ timezone                       = Europe/Berlin
 auth                           = 7
 identity                       = 
 EOF
-    chmod 600 "$SYSTEMCFG_INI"
+    chmod 755 "$SYSTEMCFG_INI"
     log "INFO: systemcfg.ini updated with SSID='$wifiname' PASS='$wifipass'"
 
     # === Restaurar backups (si existen) ===
