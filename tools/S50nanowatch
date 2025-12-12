@@ -1,0 +1,222 @@
+#!/bin/sh
+###########################################################
+# WiFi nanowatch Init Script
+#
+# Description:
+# This script provides a "nanowatch" for the WiFi connection
+# on Linux embedded systems or lightweight servers. Its main
+# goal is to ensure that the WiFi interface (wlan0) is always
+# connected to the internet and to take automatic actions if
+# connectivity fails.
+#
+# Features:
+# 1. Connection monitoring:
+#    - Periodically checks if the WiFi interface has an IP
+#      and can ping 8.8.8.8 (Google DNS) to verify connectivity.
+# 2. WiFi interface restart:
+#    - If there is no connection, it brings the interface down
+#      and up, restarts wpa_supplicant, and requests DHCP again.
+# 3. Failure counter:
+#    - If consecutive failures reach MAX_FAILS (60),
+#      increments the restart counter and decides:
+#        a) Reboot the system if MAX_RESTARTS (3) is not reached
+#        b) Power off the system if restart attempts are exceeded
+# 4. Logging:
+#    - Logs important events after a minimum number of failures (30)
+#      to /opt/wlan.logs.
+# 5. Scheduled daily tasks:
+#    - Copies specific "best shares" logs to a daily file at 23:59.
+#    - Scheduled system reboot at 00:00.
+# 6. Multiple instance prevention:
+#    - Uses /tmp/nanowatch.lock to ensure only one instance runs at a time.
+#
+# Script structure:
+# - create_nanowatch(): dynamically generates the internal
+#   /bin/nanowatch script if it does not exist.
+# - start_wifi(): restarts the interface and wpa_supplicant
+#   if a connection failure is detected.
+###########################################################
+
+nanowatch_BIN="/bin/nanowatch"
+
+create_nanowatch() {
+  cat <<'EOF' > "$nanowatch_BIN"
+#!/bin/sh
+
+LOCK_FILE="/tmp/nanowatch.lock"
+if [ -e "$LOCK_FILE" ]; then
+  exit 0
+fi
+touch "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"; exit' INT TERM EXIT
+
+# ===================== CONFIG =====================
+INTERFACE="wlan0"
+WPA_CONF="/opt/wpa_supplicant.conf"
+LOG_FILE="/opt/wlan.logs"
+COUNT_FILE="/opt/nanowatch_fail_count"
+REBOOT_HOUR_FILE="/opt/last_reboot_hour"
+LAST_COPY_FILE="/opt/last_copy_hour"
+
+MAX_FAILS_FAST=6        # ~60 segundos → reconecta WiFi
+MAX_FAILS_REBOOT=60     # 10 minutos seguidos → reboot/apagado
+MAX_RESTARTS=3
+MIN_FAILS_TO_LOG=20     # empezar a loguear desde 3-4 minutos sin internet
+
+FAILS=0
+RESTART_COUNT=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)
+STABLE_COUNT=0
+WIFI_RESTARTED=0        # para no reconectar en cada ciclo
+# =================================================
+
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+start_wifi() {
+  # Si ya tiene IP, no hacemos nada
+  ip addr show "$INTERFACE" | grep -q "inet " && return 0
+
+  log "Reconectando WiFi rápido ($INTERFACE)..."
+
+  ifconfig "$INTERFACE" down 2>/dev/null
+  sleep 0.5                  # ↓ bajado de 1
+  ifconfig "$INTERFACE" up
+  sleep 1                    # ↓ bajado de 2
+  iwconfig "$INTERFACE" power off 2>/dev/null
+
+  # Matamos cualquier wpa_supplicant viejo
+  killall wpa_supplicant 2>/dev/null
+
+  # Lanzamos wpa_supplicant en background
+  wpa_supplicant -B -i "$INTERFACE" -c "$WPA_CONF" >/dev/null 2>&1
+
+  # Esperamos MÁXIMO 8 segundos a que se asocie (no sleep fijo)
+  for i in $(seq 1 8); do
+    wpa_cli -i "$INTERFACE" status 2>/dev/null | grep -q "wpa_state=COMPLETED" && break
+    sleep 1
+  done
+
+  # Pedimos IP (con timeout)
+  udhcpc -i "$INTERFACE" -q -t 5 -T 2 >/dev/null 2>&1
+
+  # Un pequeño respiro final
+  sleep 1                    # ↓ total ahora ~5-8 segundos en vez de 9 fijos
+
+  if ip addr show "$INTERFACE" | grep -q "inet "; then
+    log "WiFi reconectado en ~$((SECONDS - start_time)) segundos"
+  else
+    log "WiFi NO se pudo reconectar esta vez"
+  fi
+}
+
+check_connection() {
+  ip addr show "$INTERFACE" | grep -q "inet " && ping -c 2 -W 2 8.8.8.8 >/dev/null 2>&1
+}
+
+log "nanowatch iniciado - monitorizando conexión"
+
+sleep 15  # dar tiempo al sistema al arrancar
+
+while true; do
+  if check_connection; then
+    if [ "$FAILS" -gt 0 ]; then
+      log "Internet recuperado tras $FAILS fallos (~$((FAILS*10)) segundos)"
+    fi
+    FAILS=0
+    STABLE_COUNT=$((STABLE_COUNT + 1))
+    WIFI_RESTARTED=0  # permitir reconexión futura
+    [ "$STABLE_COUNT" -ge 3 ] && STABLE_COUNT=3
+  else
+    STABLE_COUNT=0
+    FAILS=$((FAILS + 1))
+    WIFI_RESTARTED=0  # permitir reconectar
+
+    # Loguear solo si lleva rato caído
+    [ "$FAILS" -ge "$MIN_FAILS_TO_LOG" ] && [ $((FAILS % 10)) -eq 0 ] && \
+      log "Sin internet - $FAILS ciclos (~$((FAILS*10)) segundos)"
+
+    # → Reconexión rápida tras ~60 segundos
+    if [ "$FAILS" -eq "$MAX_FAILS_FAST" ]; then
+      start_wifi
+    fi
+
+    # → Protección extrema: 10 minutos seguidos sin internet
+    if [ "$FAILS" -ge "$MAX_FAILS_REBOOT" ]; then
+      RESTART_COUNT=$((RESTART_COUNT + 1))
+      echo "$RESTART_COUNT" > "$COUNT_FILE"
+      log "SIN INTERNET POR 10 MINUTOS - Reinicio #$RESTART_COUNT"
+
+      if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS" ]; then
+        log "Límite de reinicios alcanzado. Apagando sistema."
+        poweroff
+      else
+        log "Reiniciando sistema..."
+        reboot
+      fi
+    fi
+  fi
+
+  # ================== TAREAS DIARIAS ==================
+  H=$(date +%H)
+  M=$(date +%M)
+  CURRENT_HM="${H}:${M}"
+
+  LAST_COPY=$(cat "$LAST_COPY_FILE" 2>/dev/null || echo "")
+  LAST_REBOOT=$(cat "$REBOOT_HOUR_FILE" 2>/dev/null || echo "")
+
+  # 23:59 → copiar best shares
+  if [ "$H" = "23" ] && [ "$M" = "59" ] && [ "$LAST_COPY" != "$CURRENT_HM" ]; then
+    DATE_TODAY=$(date +"%Y-%m-%d")
+    {
+      echo "======= $DATE_TODAY ======="
+      grep "New best share" /tmp/zlog/run.log 2>/dev/null | grep "^$DATE_TODAY" | awk '{print $1,$2,"best share:",$8}'
+      echo
+    } >> /opt/best_shares.log 2>/dev/null
+    echo "$CURRENT_HM" > "$LAST_COPY_FILE"
+    log "Best shares del día guardados"
+  fi
+
+  # 00:05 → reboot diario (5 minutos después de la copia)
+  if [ "$H" = "00" ] && [ "$M" = "05" ] && [ "$LAST_REBOOT" != "$CURRENT_HM" ]; then
+    echo "$CURRENT_HM" > "$REBOOT_HOUR_FILE"
+    log "Reboot diario programado ejecutado"
+    sleep 30
+    reboot
+  fi
+
+  # Limpiar flags del día anterior
+  [ "$LAST_REBOOT" != "" ] && [ "$LAST_REBOOT" != "$CURRENT_HM" ] && echo "" > "$REBOOT_HOUR_FILE"
+  [ "$LAST_COPY" != "" ] && [ "$LAST_COPY" != "$CURRENT_HM" ] && echo "" > "$LAST_COPY_FILE"
+
+  sleep 10
+done
+EOF
+
+  chmod +x "$nanowatch_BIN"
+}
+
+case "$1" in
+  start)
+    echo "Starting WiFi nanowatch..."
+    [ ! -f "$nanowatch_BIN" ] && create_nanowatch
+    chmod +x "$nanowatch_BIN"
+    "$nanowatch_BIN" &
+    ;;
+  stop)
+    echo "Stopping WiFi nanowatch..."
+    killall nanowatch 2>/dev/null
+    rm -f /tmp/nanowatch.lock
+    ;;
+  restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0
