@@ -91,9 +91,9 @@ fi
 # Download and overwrite custom S50nanowatch
 if wget -q http://$LOCAL_IP:$SERVER_PORT/tools/S50nanowatch -O "$DEST_DIR/S50nanowatch"; then
     chmod +x "$DEST_DIR/S50nanowatch"
-    log "watchdog installed from tools."
+    log "nanowatch installed from tools."
 else
-    log "ERROR: Could not download Watchdog."
+    log "ERROR: Could not download nanowatch."
 fi
 
 # Download and copy S99btcminer
