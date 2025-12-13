@@ -18,6 +18,17 @@
 # permission. Review and approve any files in tools/ before serving.
 #############################################################
 
+
+# Path to the rcS file
+RCS_FILE="./tools/rcS"
+
+# Read values from rcS
+nano3_pool=$(grep '^nano3_pool=' "$RCS_FILE" | cut -d'"' -f2)
+wifiname=$(grep '^wifiname=' "$RCS_FILE" | cut -d'"' -f2)
+wifipass=$(grep '^wifipass=' "$RCS_FILE" | cut -d'"' -f2)
+btc_address=$(grep '^btc_address=' "$RCS_FILE" | cut -d'"' -f2)
+
+
 # ========================
 # Configuration
 # ========================
@@ -30,6 +41,15 @@ DEST_DIR="/etc/init.d"
 # ========================
 # Verify tools folder and required files
 # ========================
+
+# Check if any field is empty
+if [[ -z "$nano3_pool" || -z "$wifiname" || -z "$wifipass" || -z "$btc_address" ]]; then
+    echo "Error: rcS contains empty fields. Please fill in nano3_pool, wifiname, wifipass, and btc_address before proceeding."
+    exit 1
+fi
+
+echo "All fields are filled. Continuing with installation..."
+
 if [ ! -d "$TOOLS_DIR" ]; then
     echo "ERROR: the directory $TOOLS_DIR does not exist"
     echo "Create a 'tools' folder next to this script and place rcS and S99btcminer inside."
