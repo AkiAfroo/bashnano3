@@ -37,7 +37,7 @@
 #   if a connection failure is detected.
 ###########################################################
 nanowatch_BIN="/bin/nanowatch"
-
+rm -f /opt/wlan.logs >/dev/null 2>&1
 create_nanowatch() {
   cat <<'EOF' > "$nanowatch_BIN"
 #!/bin/sh
